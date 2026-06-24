@@ -341,6 +341,7 @@
   @keyframes spin{to{transform:rotate(360deg)}}
 
 </style>
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 </head>
 <body>
 <div class="wrap">
@@ -422,7 +423,7 @@
       <div class="spacer"></div>
       <button class="btn" id="exportBtn" type="button">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        Export CSV
+        Export Excel
       </button>
     </div>
     <div class="tablewrap" id="tableWrap"></div>
@@ -487,7 +488,7 @@
     <div class="selectfield"><label>Block</label><select id="blockBlkSel"></select></div>
     <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input type="text" id="blockSearch" placeholder="Search block or code…"></div>
     <div class="spacer"></div>
-    <button class="btn" id="exportBtnBlock" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Export CSV</button>
+    <button class="btn" id="exportBtnBlock" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Export Excel</button>
   </div>
   <div class="tablewrap" id="blockTableWrap"><div class="lazy"><div class="sp"></div>Preparing block data…</div></div>
 </div>
@@ -518,7 +519,7 @@
     <div class="selectfield"><label>Block</label><select id="schoolBlkSel"></select></div>
     <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input type="text" id="schoolSearch" placeholder="Search school name or UDISE…"></div>
     <div class="spacer"></div>
-    <button class="btn" id="exportBtnSchool" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Export CSV</button>
+    <button class="btn" id="exportBtnSchool" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Export Excel</button>
   </div>
   <div class="tablewrap" id="schoolTableWrap"><div class="lazy">Pick a district above to list its schools.</div></div>
 </div>
@@ -1410,27 +1411,71 @@ function loadDemo(){
 }
 
 /* =================== Export =================== */
+/* ===== Coloured XLSX export helpers (shared by all three modules) =====
+   CSV cannot store colour, so exports are .xlsx with cell fills that mirror
+   the dashboard's RAG tints. Needs xlsx-js-style (loaded in <head>). */
+const BAND_FILL = {
+  green:      { bg:"FFE7F3EC", fg:"FF1F6B43" }, // Above 80%
+  yellow:     { bg:"FFFBF1DC", fg:"FF8A5A0E" }, // 50–80%
+  red:        { bg:"FFFBE3E3", fg:"FFA12C2C" }, // Below 50%
+  notreached: { bg:"FFF1D6D6", fg:"FF7A1F1F" }, // Not reached / 0%
+  none: null
+};
+function bandFill(pct, received){
+  if(received===0 || received==null || received==="") return BAND_FILL.notreached;
+  if(pct>80)  return BAND_FILL.green;
+  if(pct>=50) return BAND_FILL.yellow;
+  return BAND_FILL.red;
+}
+function cell(v, band){
+  const c={ v:(v===null||v===undefined)?"":v };
+  c.t = (typeof c.v==="number") ? "n" : "s";
+  if(band){
+    c.s={ fill:{ patternType:"solid", fgColor:{ rgb:band.bg } },
+          font:{ color:{ rgb:band.fg } },
+          alignment:{ horizontal:"center" } };
+  }
+  return c;
+}
+function colWidths(aoa){
+  const w=[];
+  aoa.forEach(row=>row.forEach((c,i)=>{
+    const len=String(c&&c.v!=null?c.v:c).length;
+    w[i]=Math.min(40, Math.max(w[i]||8, len+2));
+  }));
+  return w.map(wch=>({wch}));
+}
+function saveStyledXLSX(aoa, sheetName, filename){
+  const ws=XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"]=colWidths(aoa);
+  ws["!freeze"]={ xSplit:0, ySplit:1 };
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  XLSX.writeFile(wb, filename);
+}
+
 function exportCSV(){
   const rows=computeRows();
   const loaded=!!STATE;
   const head=["Sl. No.","District","Scan Date","In File","Status","Overall Target","Overall Received","Overall %"];
   TITLES.forEach(t=>{ head.push(`${t.label} Target`,`${t.label} Received`,`${t.label} %`); });
-  const lines=[head.join(",")];
+  const aoa=[head];
   rows.forEach(r=>{
-    const cells=[r.sn, `"${r.name}"`, loaded?`"${fmtDate(r.scanDate)}"`:"", loaded?(r.inFile?"Yes":"No"):"", STATUS_META[r.status].label, r.targetTotal,
-                 loaded?r.recTotal:"", loaded?r.pct.toFixed(1):""];
+    const overallBand = loaded ? bandFill(r.pct, r.recTotal) : null;
+    const row=[r.sn, r.name, loaded?fmtDate(r.scanDate):"", loaded?(r.inFile?"Yes":"No"):"",
+               cell(STATUS_META[r.status].label, loaded?overallBand:null),
+               r.targetTotal, loaded?r.recTotal:"",
+               cell(loaded?Number(r.pct.toFixed(1)):"", overallBand)];
     TITLES.forEach(t=>{
       const tgt=r.target[t.key];
-      cells.push(tgt, loaded?r.rec[t.key]:"", loaded&&tgt?(r.rec[t.key]/tgt*100).toFixed(1):"");
+      const rec=loaded?r.rec[t.key]:null;
+      const pct=(loaded&&tgt)?(rec/tgt*100):0;
+      row.push(tgt, loaded?rec:"",
+               cell((loaded&&tgt)?Number(pct.toFixed(1)):"", loaded?bandFill(pct,rec):null));
     });
-    lines.push(cells.join(","));
+    aoa.push(row);
   });
-  const blob=new Blob([lines.join("\n")],{type:"text/csv;charset=utf-8;"});
-  const a=document.createElement("a");
-  a.href=URL.createObjectURL(blob);
-  a.download="kitab_vitran_reconciliation.csv";
-  a.click();
-  URL.revokeObjectURL(a.href);
+  saveStyledXLSX(aoa, "Reconciliation", "kitab_vitran_reconciliation.xlsx");
 }
 
 /* =================== Wiring =================== */
@@ -1834,38 +1879,51 @@ function saveHashAll(){
 /* ---- export ---- */
 function exportModuleCSV(prefix){
   const loaded = prefix==="Block" ? !!STATE_BLOCK : !!STATE_SCHOOL;
-  const head=[]; const lines=[];
+  const aoa=[];
   if(prefix==="Block"){
-    head.push("District","Block","Block_Code","Schools","Scan Date");
+    const head=["District","Block","Block_Code","Schools","Scan Date"];
     TITLES.forEach(t=>{head.push(t.label+" Target", t.label+" Received", t.label+" %");});
-    head.push("Overall %"); lines.push(head.join(","));
+    head.push("Overall %"); aoa.push(head);
     [...DIST_MAP.values()].forEach(d=>d.blocks.forEach(b=>{
       const r=loaded?blockRecv(d.name,b):null;
-      const cells=[`"${d.name}"`,`"${b.name}"`,`"${b.code}"`,b.schools,(r&&r._d)?`"${fmtDate(r._d)}"`:""];
+      const row=[d.name, b.name, b.code, b.schools, (r&&r._d)?fmtDate(r._d):""];
       let tt=0,rr=0;
-      TITLES.forEach(t=>{const tg=b.tot[t.key];const rv=recVal(r,t.key);tt+=tg;rr+=(rv||0);cells.push(tg, rv==null?"":rv, (rv!=null&&tg)?(rv/tg*100).toFixed(1):"");});
-      cells.push(tt?((rr/tt)*100).toFixed(1):"");
-      lines.push(cells.join(","));
+      TITLES.forEach(t=>{
+        const tg=b.tot[t.key], rv=recVal(r,t.key);
+        tt+=tg; rr+=(rv||0);
+        const pct=(rv!=null&&tg)?(rv/tg*100):0;
+        row.push(tg, rv==null?"":rv,
+                 cell((rv!=null&&tg)?Number(pct.toFixed(1)):"", loaded?bandFill(pct,rv):null));
+      });
+      const oPct=tt?(rr/tt*100):0;
+      row.push(cell(tt?Number(oPct.toFixed(1)):"", loaded?bandFill(oPct,rr):null));
+      aoa.push(row);
     }));
+    saveStyledXLSX(aoa, "Block", "kitab_vitran_block.xlsx");
   } else {
-    head.push("District","Block","UDISE","School","Scan Date");
+    const head=["District","Block","UDISE","School","Scan Date"];
     TITLES.forEach(t=>{head.push(t.label+" Target", t.label+" Received", t.label+" %");});
-    head.push("Overall %"); lines.push(head.join(","));
+    head.push("Overall %"); aoa.push(head);
     const dists = schoolDist ? [DIST_MAP.get(schoolDist)] : [...DIST_MAP.values()];
     dists.forEach(d=>{ if(!d) return; d.blocks.forEach(b=>{ if(schoolDist && schoolBlk!=="all" && b.name!==schoolBlk) return;
-      b.idx.forEach(ix=>{ const row=SCHOOL_ROWS[ix]; const tgt=rowTargetObj(row); const r=loaded?schoolRecv(row[3]):null;
-        const cells=[`"${d.name}"`,`"${b.name}"`,`"${row[3]}"`,`"${String(row[4]).replace(/"/g,'""')}"`,(r&&r._d)?`"${fmtDate(r._d)}"`:""];
+      b.idx.forEach(ix=>{ const srow=SCHOOL_ROWS[ix]; const tgt=rowTargetObj(srow); const r=loaded?schoolRecv(srow[3]):null;
+        const row=[d.name, b.name, srow[3], String(srow[4]), (r&&r._d)?fmtDate(r._d):""];
         let tt=0,rr=0;
-        TITLES.forEach(t=>{const tg=tgt[t.key];const rv=recVal(r,t.key);tt+=tg;rr+=(rv||0);cells.push(tg, rv==null?"":rv, (rv!=null&&tg)?(rv/tg*100).toFixed(1):"");});
-        cells.push(tt?((rr/tt)*100).toFixed(1):"");
-        lines.push(cells.join(","));
+        TITLES.forEach(t=>{
+          const tg=tgt[t.key], rv=recVal(r,t.key);
+          tt+=tg; rr+=(rv||0);
+          const pct=(rv!=null&&tg)?(rv/tg*100):0;
+          row.push(tg, rv==null?"":rv,
+                   cell((rv!=null&&tg)?Number(pct.toFixed(1)):"", loaded?bandFill(pct,rv):null));
+        });
+        const oPct=tt?(rr/tt*100):0;
+        row.push(cell(tt?Number(oPct.toFixed(1)):"", loaded?bandFill(oPct,rr):null));
+        aoa.push(row);
       });
     });});
+    const fname="kitab_vitran_school"+(schoolDist?"_"+schoolDist.replace(/\s+/g,"_"):"")+".xlsx";
+    saveStyledXLSX(aoa, "School", fname);
   }
-  const blob=new Blob([lines.join("\n")],{type:"text/csv;charset=utf-8;"});
-  const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
-  a.download = prefix==="Block" ? "kitab_vitran_block.csv" : "kitab_vitran_school"+(schoolDist?"_"+schoolDist.replace(/\s+/g,"_"):"")+".csv";
-  a.click(); URL.revokeObjectURL(a.href);
 }
 
 /* ---- module switching ---- */
